@@ -1,0 +1,37 @@
+
+# Exercises for Day 1
+
+We wish to consider how the different least squares estimation methods scale.  The will be done by simulating model matrices of different sizes, $n\times p$ and using `@benchmark` to time the evaluation of the least squares estimates.  In theory the evaluation should scale according to $np^2$.
+
+## Step 1 - Simulate values in a model matrix
+
+The simplest approach is to generate data according to the default, `Uniform(0,1)`, distribution of all the elements in the matrix.
+
+```julia
+using BenchmarkTools, LinearAlgebra, Statistics
+```
+
+```julia
+const nvec = [100, 1000, 10_000, 100_000, 1_000_000];
+const pvec = [2, 4, 8, 16, 32, 64];
+const medians = zeros(length(nvec), length(pvec));
+```
+
+```julia
+function simls(nvec, pvec)
+    results = zeros(length(nvec), length(pvec))
+    for i in 1:length(nvec), j in 1:length(pvec)
+        X = rand(nvec[i], pvec[i])
+        y = randn(nvec[i])
+        bmk = @benchmark($X\$y)
+        results[i,j] = median(bmk.times)
+    end
+    results
+end
+```
+
+```julia
+simls([10,100], [2,4])
+```
+
+Repeat this timing for larger values of $n$ and $p$ and for least squares via the Cholesky factorization and the Cholesky update.
