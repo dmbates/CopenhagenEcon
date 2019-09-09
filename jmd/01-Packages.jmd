@@ -1,0 +1,60 @@
+
+# Julia packages and repositories
+
+One goal of the Julia developers is to keep the language itself small (well, not grossly large) and to partition functionality into _packages_.  Many languages have systems for organizing and contributing packages.  Julia's system is one of the most sophisticated.
+
+Packages in the _standard library_ are maintained as part of the core language repository, https://github.com/julialang/julia .
+
+The `using` directive allows access to the functions and data types in a package that is already installed, such as those in the standard library.
+
+```julia
+using LinearAlgebra, Random, Statistics
+```
+
+These packages are documented as part of the Julia language documentation at https://docs.julialang.org
+
+(Those familiar with Python may also notice an `import` directive.  It is essentially the same as `using` until you start defining methods.)
+
+If you just need to remember the name of a function or datatype use `varinfo` to get a listing of exported symbols.
+
+```julia
+varinfo(Random)
+```
+
+Note that this is not all the functions and data types in the package - only the exported names.  The general idea is that users will access the capabilities of the package through the exported functions and data types and that internal functions are not part of the API.  Some package authors approach things differently, more in the Python style, and expect users to use qualified names.  The package documentation usually indicates the preferred style.
+
+Documentation on specific functions is available with `?` followed by the name.
+
+```julia
+?randperm
+```
+
+Functions whose names end in `!` are _mutating_ functions, which modify the value of one or more of their arguments.  Giving a mutating function a name that ends in `!` is just a convention - it has no syntactic effect.
+
+Typically the mutated arguments are at the beginning of the list
+
+```julia
+?randperm!
+```
+
+If you check the source code for the `Random` package you will see that the allocating method, `randperm`, simply allocates the result and calls the mutating method.  This is a common pattern.
+
+## Registered contributed packages
+
+The `Pkg` package provides for installation and maintenance of contributed packages.  A searchable listing of the registered contributed packages is at https://pkg.julialang.org.  They are sorted by popularity as measured by number of github stars.
+
+A Julia package is simply a git repository with certain required files and directories.  (At present I believe the repository must be on  `github`.)  A registry of such packages is maintained by Julia Computing.  Registered packages can be added to the local collection, called a `Project`, with `Pkg.add`.  Here we add some of the packages that will be used in this tutorial.
+
+```julia
+using Pkg; Pkg.add(["BenchmarkTools", "Distributions", "DataFrames", "GLM", "MixedModels", "Tables"])
+```
+
+There are different approaches to updating packages.  Some like to walk on the wild side and update their packages regularly, using `Pkg.update`
+
+```julia
+Pkg.update()
+```
+
+Occasionally updating can land the user in trouble if package versions and their dependencies end up conflicting.  To be on the safe side one can create a separate `Project`, say for thesis research, so that there is a recovery mechanism.  The details are beyond the scope of this document.
+
+It is also possible to install packages locally for development and to install from a directory or a URL.  Again, the details are beyond the scope of this document.  See the documentation for the `Pkg` package.

@@ -1,0 +1,239 @@
+
+# A simple Gibbs sampler
+
+The Gibbs sampler discussed on
+[Darren Wilkinson's blog](http://bit.ly/IWhJ52) and also on
+[Dirk Eddelbuettel's blog](http://dirk.eddelbuettel.com/blog/2011/07/14/)
+as been implemented in several languages, the first of which was
+[R](http://www.R-project.org).
+
+The task is to create a Gibbs sampler for the density
+\begin{equation}
+  f(x,y) = k\, x^2 \exp(-xy^2 - y^2 + 2y - 4x),\quad x > 0
+\end{equation}
+using the conditional distributions
+\begin{equation}
+  X|Y \sim \Gamma\left(3, \frac{1}{y^2+4}\right)
+\end{equation}
+and
+\begin{equation}
+  Y|X \sim \mathcal{N}\left(\frac{1}{1+x}, \frac{1}{2(1+x)}\right)
+\end{equation}
+(Gamma parameters are shape, scale.  Normal parameters are mean, variance.)
+
+## An _R_ version of simple Gibbs sample
+
+```r
+Rgibbs <- function(N,thin) {
+    mat <- matrix(0,nrow=N,ncol=2)
+    x <- y <- 0
+    for (i in 1:N) {
+        for (j in 1:thin) {
+            x <- rgamma(1, 3, y*y + 4) # 3rd arg is rate
+            y <- rnorm(1, 1/(x + 1), 1/sqrt(2*(x + 1)))
+        }
+        mat[i,] <- c(x,y)
+    }
+    mat
+}
+```
+
+## A _Julia_ version using the `Distributions` package
+
+First load the packages to be used
+
+```julia
+using BenchmarkTools, Distributions, Random
+```
+
+The `Distributions` package provides form random sampling, quantile, cdf (cumulative distribution function) and pdf (probability density function) or pmf (probability mass function) evaluation from a wide variety of probability distributions.  We will use it to sample from the Gamma and Normal distributions.
+
+The `Rgibbs` function can be translated nearly line for line.  The only change is that the definition of the Gamma distribution in R uses the rate parameter and the `Gamma` type in the `Distributions` package is defined from the scale parameter, which is the inverse of the rate.
+
+```julia
+function jgibbs(N, thin)
+    mat = zeros(N, 2)
+    x = y = 0.0
+    for i in 1:N
+        for j in 1:thin
+            x = rand(Gamma(3., inv(abs2(y)+4)))  #shape/scale
+            y = rand(Normal(inv(x+1), inv(sqrt(2(x+1)))))
+        end
+        mat[i,1] = x; mat[i,2] = y
+    end
+    mat
+end
+```
+
+* In _Julia_ `0` is an integer and `0.0` is floating
+  point. _R_ has the peculiar convention that `0` is floating point
+  and `0L` is an integer.
+---
+## Comparative timings
+
+In _R_ generating a bivariate sample of size 10,000 with a thinning of
+500 takes about 27 sec. on the computer I use
+```{.r}
+> system.time(Rgibbs(10000,500))
+   user  system elapsed 
+ 27.438   0.018  27.457
+```
+
+The corresponding _Julia_ function runs in a fraction of a second.
+
+```julia
+jgibbs(10000,500);  # warm-up
+@time jgibbs(10000,500);
+```
+
+Because in _Julia_ the first call to a method invokes the JIT, we time the
+second call.  The `@benchmark` macro times the execution several times and
+provides a statistical summary of the result.
+
+```julia
+@benchmark jgibbs(10000, 500)
+```
+
+The Julia function is about 50 times faster than the R function for this example.  The reason, of course, is that this type of evaluation, which more-or-less must be written as nested loops is ill-suited to the R evaluation model  On the other hand, the Julia JIT compiler is quite well-suited to various forms of loops.
+
+So the first lesson of Julia is _"Don't fear the loop."_  If the operation is naturally phrased using some form of iteration, then use iteration.  There is very little overhead from the looping in this function.  Most of the execution time is spent in sampling from the Gamma distribution, less in sampling from the Normal distribution, and that is pretty much all there is to it.  We can profile the function execution, using the `Profile` package from the standard library, to check but this needs to be done in a terminal.  The `ProfileView` package provides a convenient visualization of the results.
+
+## Variations on a theme - reproducible "random" numbers
+
+Paradoxically, we often want to use reproducible "random" number streams.  For example in comparing methods it may be important to check if they generate the same results from the same random number seed.  This is achieved in Julia by passing a random number generator as an argument.
+
+```julia
+function jgibbs(rng::AbstractRNG, N, thin)
+    mat = zeros(N, 2)
+    x = y = 0.0
+    for i in 1:N
+        for j in 1:thin
+            x = rand(rng, Gamma(3., inv(abs2(y)+4)))  #shape/scale
+            y = rand(rng, Normal(inv(x+1), inv(sqrt(2(x+1)))))
+        end
+        mat[i,1] = x; mat[i,2] = y
+    end
+    mat
+end
+```
+
+Notice that this "function" definition does not remove the previous definition.
+
+```julia
+methods(jgibbs)
+```
+
+There are now two methods with different signatures for the `jgibbs` generic function.  If we use the old method we get different sequences from each call
+
+```julia
+jgibbs(6, 500)
+```
+
+```julia
+jgibbs(6, 500)
+```
+
+But if we pass a random number generator initialized to a particular value we get a reproducible sequence
+
+```julia
+jgibbs(MersenneTwister(1234321), 6, 500)
+```
+
+```julia
+jgibbs(MersenneTwister(1234321), 6, 500)
+```
+
+This works fine except that we have violated a principle of software engineering by unnecessarily duplicating the code in the main body of the method.  It's not a problem until you change the code in one place and forget to copy the change to the other.  Then copy-and-paste programming is a problem.
+
+There is a simple way out of this, which is to define one method to call the other with suitable argument values. 
+The default random number generator is `Random.GLOBAL_RNG` (note, this is a case where a fully qualified name is needed) so we simply define
+
+```julia
+jgibbs(N, thin) = jgibbs(Random.GLOBAL_RNG, N, thin)
+```
+
+```julia
+jgibbs(6, 500)
+```
+
+This is a common idiom in Julia - defining methods that rearrange arguments, possibly adding default values then calling another method for the same generic function.
+
+## Variations on a theme - preallocating results
+
+We have seen cases of _mutating_ functions that also have a non-mutating version.  The mutating function takes preallocated storage for the result and just fills it in.  The non-mutating version allocates the storage and passes it to the mutating version.  The most general method will be the mutating method that takes the RNG and the matrix to be overwritten with the results.
+
+```julia
+function jgibbs!(rng::AbstractRNG, mat::AbstractMatrix{Float64}, thin=500)
+    m, n = size(mat)   # m = number of rows, n = number of columns
+    if n ≠ 2
+        throw(ArgumentError("Argument mat should have exactly 2 columns"))
+    end
+    x = y = 0.0
+    for i in 1:m
+        for j in 1:thin
+            x = rand(rng, Gamma(3., inv(abs2(y)+4)))
+            y = rand(rng, Normal(inv(x+1), inv(sqrt(2(x+1)))))
+        end
+        mat[i,1] = x; mat[i,2] = y
+    end
+    mat
+end
+```
+
+Notice that we have also added a default value for the `thin` argument.
+
+Now check that this provides the same results for a reproducible RNG.
+
+```julia
+jgibbs!(MersenneTwister(1234321), zeros(6, 2))
+```
+
+The other methods can now be defined in terms of this mutating method
+
+```julia
+jgibbs!(mat::AbstractMatrix{Float64}, thin=500) = jgibbs!(Random.GLOBAL_RNG, mat, thin)
+jgibbs(rng::AbstractRNG, N, thin=500) = jgibbs!(rng, zeros(Float64, N, 2), thin)
+methods(jgibbs!)
+```
+
+Notice that the default value of the `thin` argument is implemented by defining a new method.  Julia has a hideously fast _multiple dispatch_ algorithm to determine the most suitable method to call, which is often used to great advantage in designing code.  The `LinearAlgebra` package, for example, defines an astonishing number of methods for evaluating matrix products or solving systems of equations, allowing for highly specialized and efficient code.
+
+```julia
+const rng = MersenneTwister(4321234);
+```
+
+```julia
+@benchmark jgibbs($rng, 10000)
+```
+
+```julia
+const randmat = zeros(10_000, 2);
+```
+
+```julia
+@benchmark jgibbs!($rng, $randmat)
+```
+
+```julia
+methods(jgibbs)
+```
+
+## Mutating arguments - isn't that dangerous?
+
+Those familiar with `R`, for example, may find the idea of overwriting an argument to be somewhat alarming.  Pure `R` code should obey _functional semantics_ which means that function arguments behave as if they are copies of the values passed to the function.  (In practice, languages like `R` use _copy on modify_ but the idea is that you don't change the actual argument that was passed in to the function.  If necessary you allocate a copy and change that.)
+
+That is not the case in Julia.  You can, and often do, change the value of an array or similar type of argument.
+
+```julia
+mat = zeros(6,2)
+```
+
+```julia
+jgibbs!(mat)
+```
+
+```julia
+mat   # contents of the array have been changed
+```
+
+The reason for allowing this is to allow re-use of storage.  Dynamic languages that are continuously allocating storage and occasionally _garbage collecting_ storage that is no longer in use are wonderful to use until they aren't.  If you need to operate on a large data structure in, say, an iterative algorithm, the overhead of allocation/garbage collection can be substantial.  Julia allows the programmer to control this allocation, which is often a key to making code run fast.

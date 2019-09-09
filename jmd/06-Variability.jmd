@@ -1,0 +1,229 @@
+
+# Assessing variability of parameter estimates 
+
+When we have a specific hypothesis to test we can fit the model under the null hypothesis and use a likelihood ratio test.  In general if we wish to create, say, confidence intervals on some of the parameters, we should use either profiling or a parametric bootstrap.  When the number of observations is reasonably large confidence intervals on the fixed-effects parameters can be created from the estimate and the standard errors.  However, the parameters in the covariance matrix cannot be expected to have nice symmetric intervals characterizing the variability.  For those case, it helps to form a parametric bootstrap sample.
+
+```julia
+using LinearAlgebra, MixedModels, RCall, Random, Statistics, Tables
+```
+
+```julia
+RCall.ijulia_setdevice(MIME("image/svg+xml"), width=7, height=5)
+```
+
+```julia
+f1 = @formula Reaction ~ 1 + Days + (1+Days|Subject);
+m1 = fit(MixedModel, f1, rcopy(R"lme4::sleepstudy"))
+```
+
+```julia
+rng = MersenneTwister(5678765);
+```
+
+```julia
+bsamp = parametricbootstrap(rng, 10, m1, (:σ, :β, :θ))  # force compilation
+```
+
+A small sample was generated here just to show the technique.  The result of the bootstrap is a row-oriented table with a scalar and two vectors.  The scalar is the estimate of $\sigma$ from each bootstrapped sample.  The fixed-effects coefficients are returned as a vector as are the $\theta$ covariance parameters.
+
+The method is reasonably fast even for a large number of samples on a simple model like this
+
+```julia
+bsamp = @time parametricbootstrap(rng, 10_000, m1, (:σ, :β, :θ));
+```
+
+We can examine the distribution of the parameter estimates graphically and numerically.  A _density plot_ gives the overall shape of the distribution - except when there are edge effects as in an example shown below.  As seen in the table, the names of the columns are $\sigma$, $\beta$, and $\theta$.  A particular column is extracted with the `'.'` operator.
+
+```julia
+R"""
+library(lattice)
+densityplot($(bsamp.σ), plot.points=FALSE,
+    xlab="Bootstrap estimates of residual standard deviation")
+"""
+```
+
+Another plot of interest is a normal probability plot.  If the distribution is close to a Normal distribution this plot will be close to a straight line.
+
+```julia
+R"""
+qqmath($(quantile(bsamp.σ, inv(512):inv(256):1)),
+    type=c("g","p"), aspect = 1,
+    xlab="Standard normal quantiles",
+    ylab="Residual standard deviation, σ")
+"""
+```
+
+The bootstrap sample can be used to construct a confidence interval.  For, say, a 95% confidence interval we want an interval that contains 95% of the observed samples.  There are many such intervals.  One way of choosing a particular interval is to choose the one with the shortest length, which is also the interval where the density is greatest.  The following function returns this interval.
+
+```julia
+"""
+    shortestconfing(v, level=0.95)
+
+Return the shortest interval containing `level` proportion of the values of `v`
+
+The end points of the interval are two values in `v` such that `level` proportion (95% by default)
+of `v` is in the interval and this is the shortest of all such intervals.
+"""
+function shortestconfint(v::AbstractVector{<: Real}, level::Real=0.95)
+    v = issorted(v) ? v : sort(v)
+    if !(0 < level < 1)
+        throw(ArgumentError("0 < level = $level < 1 is not true"))
+    end
+    n = length(v)
+    npts = Int(ceil(level * n))
+    if !(1 < npts < n)
+        throw(ArgumentError("level = $level for vector of length $n is not feasible"))
+    end
+    len, lowerindex = findmin([v[npts + i - 1] - v[i] for i in 1:(n - npts)])
+    v[lowerindex], v[lowerindex + npts]
+end
+```
+
+Applying this to the $\sigma$ sample produces
+
+```julia
+shortestconfint(bsamp.σ)
+```
+
+Next consider the sample of estimates of the population intercept, which corresponds to the reaction time of a typical member of the population on their regular sleep schedule.  In this example we sort the sample values, making it easier to determine quantiles or the confidence intervals.
+
+```julia
+sortedintercepts = sort(first.(bsamp.β))
+```
+
+```julia
+R"""
+densityplot($sortedintercepts, plot.points=FALSE, xlab="Bootstrap sample of population intercept (ms.)")
+"""
+```
+
+```julia
+shortestconfint(sortedintercepts)
+```
+
+This interval is surprisingly close to the interval obtained assuming a Normal sampling distribution with the standard errors evaluated from the asymptotic approximation.  It is reasonable to use these in this case because there are 180 responses determining the estimates of the population parameters.
+
+```julia
+m1.β .+ m1.stderror * [-1.960 1.960]  # 95% confidence intervals on the fixed-effects
+```
+
+```julia
+R"""
+qqmath($(quantile(sortedintercepts, inv(512):inv(256):1, sorted=true)), xlab="Standard normal quantiles",
+   ylab="Bootstrap samples of population intercept (ms.)", type=c("g","p"), aspect=1)
+"""
+```
+
+Next consider the standard deviation of the random effects for the intercept.  This is evaluated as the product of $\sigma$ and $\theta_1$.
+
+```julia
+sortedsigma1 = sort(bsamp.σ .* first.(bsamp.θ));
+```
+
+```julia
+R"""
+qqmath($(quantile(sortedsigma1, inv(512):inv(256):1, sorted=true)), xlab="Standard normal quantiles",
+   ylab="Bootstrap samples of random intercept std. deviation (ms.)", type=c("g","p"), aspect=1)
+"""
+```
+
+There is a slight skewness of the distribution indicated by this plot.  Curiously, the distribution appears to be skewed to the left, when we generally expect variances and standard deviations to be skew to the right.
+
+The skewness is not noticeable in the density plot.
+
+```julia
+R"""
+densityplot($sortedsigma1, plot.points=FALSE,
+    xlab="Bootstrap samples of standard deviation of intercept (ms.)")
+"""
+```
+
+```julia
+ciσ₁ = shortestconfint(sortedsigma1)
+```
+
+The estimated $\sigma_1$ is
+
+```julia
+σ₁ = m1.σ * m1.θ[1]
+```
+
+and the width of the interval on each side of the estimate,
+
+```julia
+ciσ₁ .- σ₁
+```
+
+shows that the interval is indeed considerably wider on the left than on the right, contrary to intuition.
+
+To evaluate the standard deviation of the random-effects for slopes, we multiply $\sigma$ by $\sqrt{\theta_2^2+\theta_3^2}$
+
+```julia
+sortedsigma2 = sort(bsamp.σ .* norm.(view.(bsamp.θ, Ref(2:3))))
+```
+
+```julia
+R"""
+densityplot($sortedsigma2, plot.points=FALSE,
+    xlab="Bootstrap samples of standard deviation of slope (ms./day)")
+"""
+```
+
+```julia
+R"""
+qqmath($(quantile(sortedsigma2, inv(512):inv(256):1, sorted=true)), xlab="Standard normal quantiles",
+   ylab="Bootstrap samples of random slope std. deviation (ms./day)", type=c("g","p"), aspect=1)
+"""
+```
+
+```julia
+shortestconfint(sortedsigma2)
+```
+
+The within-subject correlation of the random effects often displays the greatest deviation from a nice, symmetric, bell-shaped curve.  Because the $\sigma$ parameter just multiplies the elements of $\theta$, the correlation can be evaluated from $\theta$ alone.
+
+```julia
+sortedrho = sort(map(θ -> θ[2] / norm(view(θ, 2:3)), bsamp.θ));
+```
+
+```julia
+R"""
+densityplot($sortedrho, plot.points=FALSE,
+    xlab="Standard normal quantiles",
+    ylab="Bootstrap samples of random-effects correlation")
+"""
+```
+
+Now here we have something interesting.  There is a bump in the density at $\rho=1$.  Because a correlation must be between -1 and +1, the density above +1 is spurious.  It is caused by an _edge effect_ of the density smoother.  If we check a histogram instead
+
+```julia
+R"""
+histogram($sortedrho, xlab="Bootstrap sample of the within-subject correlation of random effects")
+"""
+```
+
+or a normal probability plot
+
+```julia
+R"""
+qqmath($(quantile(sortedrho, inv(512):inv(256):1)), xlab="Standard normal quantiles", 
+    ylab="Bootstrap sample of the within-subject correlation of random effects", 
+    type=c("g", "p"), aspect=1)
+"""
+```
+
+The distribution of the bootstrap samples extends all the way to +1 where it "hits the wall".  The correlation of +1 corresponds to a singular covariance matrix.  Instead of having a bivariate or two-dimensional distribution of random effects, a singular covariance corresponds to a one-dimensional distribution.  All of the random effects would fall on a line.
+
+The shortest confidence interval in this case reaches the boundary
+
+```julia
+shortestconfint(sortedrho)
+```
+
+This shows that the correlation is not precisely estimated.  It must be between -1 and +1 and the 95% confidence interval spans 70% of that range.
+
+The singular covariance matrices are those where one of the diagonal elements of $\lambda$, usually the last one, is zero.  Here there are two cases of the `[1,1]` element being zero and 310 cases of the `[2,2]` element being zero. 
+
+```julia
+(sum(iszero, first.(bsamp.θ)), sum(iszero, last.(bsamp.θ)))
+```
