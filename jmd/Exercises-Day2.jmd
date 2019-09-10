@@ -1,0 +1,12 @@
+---
+  title: Exercises for Day 2 of Mixed Models class
+---
+
+1. Import the dataset `nlme::Oxboys` from R.
+2. Create a multi-panel plot of these data, `height` vs. `age` by `Subject`.  I do this using the `xyplot` function in the `lattice` package with a formula like
+    `height ~ age | Subject`.  The subjects have already been ordered by increasing average height.
+3. What would you expect for population estimates of intercept and slope, based on the plot?
+4. Fit a linear mixed-effects model with fixed effects for intercept and slope w.r.t. age and with random effects by `Subject` for each of these.
+5. Do the estimates of the fixed effects correspond to your expectations in question 3?
+6. Use a parametric bootstrap sample (n = 10,000) and create density plots, normal probability plots and shortest confidence intervals for each of the parameters.
+7. Compare the confidence intervals for the fixed effects to those from the estimate and standard error.
