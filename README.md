@@ -18,8 +18,8 @@ convert_doc("01-Packages.jmd", "01-Packages.ipynb")
 ```
 
 If you already have jupyter or jupyter lab installed just start it and open the `.ipynb` files.  If not, you may be able to start jupyter with
-```
-uaing IJulia
+```julia
+using IJulia
 
 notebook()
 ```
